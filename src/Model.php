@@ -43,6 +43,7 @@ abstract class Model implements JsonSerializable, ArrayAccess, Arrayable, Jsonab
     use model\concern\RelationShip;
     use model\concern\ModelEvent;
     use model\concern\TimeStamp;
+    use model\concern\AutoWriteId;
     use model\concern\Conversion;
 
     /**
@@ -409,7 +410,7 @@ abstract class Model implements JsonSerializable, ArrayAccess, Arrayable, Jsonab
         }
 
         if (!empty($this->table)) {
-            $query->table($this->table);
+            $query->table($this->table . $this->suffix);
         } elseif (!empty($this->suffix)) {
             $query->suffix($this->suffix);
         }
@@ -418,6 +419,7 @@ abstract class Model implements JsonSerializable, ArrayAccess, Arrayable, Jsonab
             ->json($this->json, $this->jsonAssoc)
             ->setFieldType(array_merge($this->schema, $this->jsonType))
             ->setKey($this->getKey())
+            ->readonly($this->readonly)
             ->lazyFields($this->lazyFields);
 
         // 软删除
@@ -597,7 +599,7 @@ abstract class Model implements JsonSerializable, ArrayAccess, Arrayable, Jsonab
      *
      * @return bool
      */
-    public function save(array | object $data = [], string $sequence = null): bool
+    public function save(array | object $data = [], ?string $sequence = null): bool
     {
         if ($data instanceof Model) {
             $data = $data->getData();
@@ -706,7 +708,7 @@ abstract class Model implements JsonSerializable, ArrayAccess, Arrayable, Jsonab
         // 检查允许字段
         $allowFields = $this->checkAllowFields();
 
-        foreach ($this->relationWrite as $name => $val) {
+        foreach ($this->relationWrite as $val) {
             if (!is_array($val)) {
                 continue;
             }
@@ -752,32 +754,50 @@ abstract class Model implements JsonSerializable, ArrayAccess, Arrayable, Jsonab
      *
      * @return bool
      */
-    protected function insertData(string $sequence = null): bool
+    protected function insertData(?string $sequence = null): bool
     {
         if (false === $this->trigger('BeforeInsert')) {
             return false;
         }
 
         $this->checkData();
-        $data = $this->data;
 
-        // 时间戳自动写入
-        if ($this->autoWriteTimestamp) {
-            if ($this->createTime && !array_key_exists($this->createTime, $data)) {
-                $data[$this->createTime]       = $this->autoWriteTimestamp();
-                $this->data[$this->createTime] = $data[$this->createTime];
+        // 主键自动写入
+        if ($this->isAutoWriteId()) {
+            $pk = $this->getPk();
+            if (is_string($pk) && !isset($this->data[$pk])) {
+                $this->data[$pk] = $this->autoWriteId();
             }
+        }
 
-            if ($this->updateTime && !array_key_exists($this->updateTime, $data)) {
-                $data[$this->updateTime]       = $this->autoWriteTimestamp();
-                $this->data[$this->updateTime] = $data[$this->updateTime];
+        // 时间字段自动写入
+        if ($this->autoWriteTimestamp) {
+            foreach ([$this->createTime, $this->updateTime] as $field) {
+                if ($field && !array_key_exists($field, $this->data)) {
+                    $this->data[$field] = $this->autoWriteTimestamp();
+                }
+            }
+        }
+
+        // 自动（使用修改器）写入字段
+        if (!empty($this->insert)) {
+            foreach ($this->insert as $name => $val) {
+                $field = is_string($name) ? $name : $val;
+                if (!isset($this->data[$field])) {
+                    if (is_string($name)) {
+                        $this->data[$name] = $val;
+                    } else {
+                        $this->setAttr($field, null);
+                    }
+                }
             }
         }
 
         // 检查允许字段
         $allowFields = $this->checkAllowFields();
 
-        $db = $this->db();
+        $db   = $this->db();
+        $data = $this->data;
 
         $db->transaction(function () use ($data, $sequence, $allowFields, $db) {
             $result = $db->strict(false)
@@ -787,7 +807,7 @@ abstract class Model implements JsonSerializable, ArrayAccess, Arrayable, Jsonab
                 ->insert($data, true);
 
             // 获取自动增长主键
-            if ($result) {
+            if ($result && !$this->isAutoWriteId()) {
                 $pk = $this->getPk();
 
                 if (is_string($pk) && (!isset($this->data[$pk]) || '' == $this->data[$pk])) {
@@ -917,14 +937,14 @@ abstract class Model implements JsonSerializable, ArrayAccess, Arrayable, Jsonab
     /**
      * 写入数据.
      *
-     * @param array  $data       数据数组
-     * @param array  $allowField 允许字段
-     * @param bool   $replace    使用Replace
-     * @param string $suffix     数据表后缀
+     * @param array|object  $data 数据
+     * @param array  $allowField  允许字段
+     * @param bool   $replace     使用Replace
+     * @param string $suffix      数据表后缀
      *
      * @return static
      */
-    public static function create(array $data, array $allowField = [], bool $replace = false, string $suffix = ''): Model
+    public static function create(array | object $data, array $allowField = [], bool $replace = false, string $suffix = ''): Model
     {
         $model = new static();
 
@@ -944,14 +964,14 @@ abstract class Model implements JsonSerializable, ArrayAccess, Arrayable, Jsonab
     /**
      * 更新数据.
      *
-     * @param array  $data       数据数组
-     * @param mixed  $where      更新条件
-     * @param array  $allowField 允许字段
-     * @param string $suffix     数据表后缀
+     * @param array|object  $data 数据数组
+     * @param mixed  $where       更新条件
+     * @param array  $allowField  允许字段
+     * @param string $suffix      数据表后缀
      *
      * @return static
      */
-    public static function update(array $data, $where = [], array $allowField = [], string $suffix = '')
+    public static function update(array | object $data, $where = [], array $allowField = [], string $suffix = '')
     {
         $model = new static();
 
@@ -1095,7 +1115,7 @@ abstract class Model implements JsonSerializable, ArrayAccess, Arrayable, Jsonab
      *
      * @return Query
      */
-    public static function withoutGlobalScope(array $scope = null): Query
+    public static function withoutGlobalScope(?array $scope = null): Query
     {
         $model = new static();
 

@@ -62,9 +62,9 @@ trait ModelRelationQuery
      *
      * @return $this
      */
-    public function hidden(array $hidden = [], bool $merge = false)
+    public function hidden(array $hidden, bool $merge = false)
     {
-        $this->options['hidden'] = $merge ? array_merge($this->options['hidden'], $hidden) : $hidden;
+        $this->options['hidden'] = [$hidden, $merge];
 
         return $this;
     }
@@ -77,9 +77,9 @@ trait ModelRelationQuery
      *
      * @return $this
      */
-    public function visible(array $visible = [], bool $merge = false)
+    public function visible(array $visible, bool $merge = false)
     {
-        $this->options['visible'] = $merge ? array_merge($this->options['visible'], $visible) : $visible;
+        $this->options['visible'] = [$visible, $merge];
 
         return $this;
     }
@@ -92,9 +92,9 @@ trait ModelRelationQuery
      *
      * @return $this
      */
-    public function append(array $append = [], bool $merge = false)
+    public function append(array $append, bool $merge = false)
     {
-        $this->options['append'] = $merge ? array_merge($this->options['append'], $append) : $append;
+        $this->options['append'] = [$append, $merge];
 
         return $this;
     }
@@ -142,7 +142,7 @@ trait ModelRelationQuery
     protected function scopeQuery()
     {
         if (!empty($this->options['scope'])) {
-            foreach ($this->options['scope'] as $name => $val) {
+            foreach ($this->options['scope'] as $val) {
                 [$call, $args] = $val;
                 call_user_func_array($call, $args);
             }
@@ -214,7 +214,7 @@ trait ModelRelationQuery
                 $field($this, $data[$key] ?? null, $data);
             } elseif ($this->model) {
                 // 检查字段是否有数据
-                if ($strict && (!isset($data[$field]) || empty($data[$field]))) {
+                if ($strict && (!isset($data[$field]) || (empty($data[$field]) && !in_array($data[$field], ['0', 0])))) {
                     continue;
                 }
 
@@ -274,6 +274,19 @@ trait ModelRelationQuery
     }
 
     /**
+     * 设置关联模型的动态绑定
+     *
+     * @param array $attr 绑定数据
+     *
+     * @return $this
+     */
+    public function withBind(array $attr)
+    {
+        $this->options['bind_attr'] = $attr;
+        return $this;
+    }
+
+    /**
      * 设置数据字段获取器.
      *
      * @param string|array $name     字段名
@@ -281,7 +294,7 @@ trait ModelRelationQuery
      *
      * @return $this
      */
-    public function withAttr(string | array $name, callable $callback = null)
+    public function withAttr(string | array $name, ?callable $callback = null)
     {
         if (is_array($name)) {
             foreach ($name as $key => $val) {
@@ -412,7 +425,7 @@ trait ModelRelationQuery
      *
      * @return $this
      */
-    public function withCache(string | array | bool $relation = true, $key = true, $expire = null, string $tag = null)
+    public function withCache(string | array | bool $relation = true, $key = true, $expire = null, ?string $tag = null)
     {
         if (empty($this->model)) {
             return $this;
@@ -675,12 +688,13 @@ trait ModelRelationQuery
 
         // 动态获取器
         if (!empty($this->options['with_attr'])) {
-            $result->withAttr($this->options['with_attr']);
+            $result->withFieldAttr($this->options['with_attr']);
         }
 
         foreach (['hidden', 'visible', 'append'] as $name) {
-            if (!empty($this->options[$name])) {
-                $result->$name($this->options[$name]);
+            if (isset($this->options[$name])) {
+                [$value, $merge] = $this->options[$name];
+                $result->$name($value, $merge);
             }
         }
 

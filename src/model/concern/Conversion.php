@@ -147,7 +147,7 @@ trait Conversion
      *
      * @return $this
      */
-    public function append(array $append = [], bool $merge = false)
+    public function append(array $append, bool $merge = false)
     {
         $this->append = $merge ? array_merge($this->append, $append) : $append;
 
@@ -162,7 +162,7 @@ trait Conversion
      *
      * @return $this
      */
-    public function hidden(array $hidden = [], bool $merge = false)
+    public function hidden(array $hidden, bool $merge = false)
     {
         $this->hidden = $merge ? array_merge($this->hidden, $hidden) : $hidden;
 
@@ -177,7 +177,7 @@ trait Conversion
      *
      * @return $this
      */
-    public function visible(array $visible = [], bool $merge = false)
+    public function visible(array $visible, bool $merge = false)
     {
         $this->visible = $merge ? array_merge($this->visible, $visible) : $visible;
 
@@ -260,6 +260,20 @@ trait Conversion
                 $item[$key] = $this->getAttr($key);
             } elseif (!isset($hidden[$key]) && !$hasVisible) {
                 $item[$key] = $this->getAttr($key);
+            } elseif (in_array($key, $this->json)) {
+                if (isset($hidden[$key]) && is_array($hidden[$key])) {
+                    // 隐藏JSON属性
+                    foreach ($hidden[$key] as $name) {
+                        if (is_array($val)) {
+                            unset($val[$name]);
+                        } else {
+                            unset($val->$name);
+                        }
+                    }
+                    $item[$key] = $val;
+                } elseif (!isset($hidden[$key])) {
+                    $item[$key] = $val;
+                }
             }
 
             if (isset($this->mapping[$key])) {
@@ -374,7 +388,7 @@ trait Conversion
      *
      * @return Collection
      */
-    public function toCollection(iterable $collection = [], string $resultSetType = null): Collection
+    public function toCollection(iterable $collection = [], ?string $resultSetType = null): Collection
     {
         $resultSetType = $resultSetType ?: $this->resultSetType;
 

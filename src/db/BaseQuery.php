@@ -277,20 +277,21 @@ abstract class BaseQuery
 
     /**
      * 得到当前或者指定名称的数据表.
-     *
-     * @param string $name 不含前缀的数据表名字
+     * @param bool $alias 是否返回数据表别名 
      *
      * @return string|array|Raw
      */
-    public function getTable(string $name = '')
+    public function getTable(bool $alias = false)
     {
-        if (empty($name) && isset($this->options['table'])) {
-            return $this->options['table'];
+        if (isset($this->options['table'])) {
+            $table =  $this->options['table'];
+            if ($alias && is_string($table) && !empty($this->options['alias'][$table])) {
+                return $this->options['alias'][$table];
+            }
+            return $table;
         }
 
-        $name = $name ?: $this->name;
-
-        return $this->prefix . Str::snake($name) . $this->suffix;
+        return $this->prefix . Str::snake($this->name) . $this->suffix;
     }
 
     /**
@@ -303,6 +304,20 @@ abstract class BaseQuery
     public function setFieldType(array $type)
     {
         $this->options['field_type'] = $type;
+
+        return $this;
+    }
+
+    /**
+     * 设置只读字段.
+     *
+     * @param array $fields 只读字段
+     *
+     * @return $this
+     */
+    public function readonly(array $fields)
+    {
+        $this->options['readonly_fields'] = $fields;
 
         return $this;
     }
@@ -334,7 +349,7 @@ abstract class BaseQuery
      *
      * @return mixed
      */
-    public function getLastInsID(string $sequence = null)
+    public function getLastInsID(?string $sequence = null)
     {
         return $this->connection->getLastInsID($this, $sequence);
     }
@@ -344,17 +359,40 @@ abstract class BaseQuery
      *
      * @param string $field   字段名
      * @param mixed  $default 默认值
+     * @param bool   $useModelAttr 是否使用模型获取器
      *
      * @return mixed
      */
-    public function value(string $field, $default = null)
+    public function value(string $field, $default = null, bool $useModelAttr = false)
     {
         $result = $this->connection->value($this, $field, $default);
 
         $array[$field] = $result;
-        $this->result($array);
+        if ($this->model && $useModelAttr) {
+            // JSON数据处理
+            if (!empty($this->options['json'])) {
+                $this->jsonModelResult($array);
+            }
+            return $this->model->newInstance($array)->getAttr($field);
+        }
 
+        if (!empty($this->options['json'])) {
+            $this->jsonResult($array);
+        }
         return $array[$field];
+    }
+
+    /**
+     * 得到某个字段的值 并且经过模型的获取器处理
+     *
+     * @param string $field   字段名
+     * @param mixed  $default 默认值
+     *
+     * @return mixed
+     */
+    public function valueWithAttr(string $field, $default = null)
+    {
+        return $this->value($field, $default, true);
     }
 
     /**
@@ -362,18 +400,57 @@ abstract class BaseQuery
      *
      * @param string|array $field 字段名 多个字段用逗号分隔
      * @param string       $key   索引
+     * @param bool         $useModelAttr 是否使用模型获取器
      *
      * @return array
      */
-    public function column(string | array $field, string $key = ''): array
+    public function column(string | array $field, string $key = '', bool $useModelAttr = false): array
     {
         $result = $this->connection->column($this, $field, $key);
+        return array_map(function ($item) use ($field, $useModelAttr) {
+            if (is_array($item)) {
+                if ($this->model && $useModelAttr) {
+                    // JSON数据处理
+                    if (!empty($this->options['json'])) {
+                        $this->jsonModelResult($item);
+                    }
+                    return $this->model->newInstance($item)->toArray();
+                }
+                if (!empty($this->options['json'])) {
+                    $this->jsonResult($item);
+                }
+                return $item;
+            }
 
-        if (count($result) != count($result, 1)) {
-            $this->resultSet($result, false);
-        }
+            if (is_array($field) && 1 === count($field)) {
+                $field = current($field);
+            }
 
-        return $result;
+            $array[$field] = $item;
+            if ($this->model && $useModelAttr) {
+                if (!empty($this->options['json'])) {
+                    $this->jsonModelResult($array);
+                }
+                return $this->model->newInstance($array)->getAttr($field);
+            }
+            if (!empty($this->options['json'])) {
+                $this->jsonResult($array);
+            }
+            return $array[$field];
+        }, $result);
+    }
+
+    /**
+     * 得到某个列的数组 并且经过模型的获取器处理.
+     *
+     * @param string|array $field 字段名 多个字段用逗号分隔
+     * @param string       $key   索引
+     *
+     * @return array
+     */
+    public function columnWithAttr(string | array $field, string $key = '')
+    {
+        return $this->column($field, $key, true);
     }
 
     /**
@@ -566,7 +643,7 @@ abstract class BaseQuery
      *
      * @return $this
      */
-    public function limit(int $offset, int $length = null)
+    public function limit(int $offset, ?int $length = null)
     {
         $this->options['limit'] = $offset . ($length ? ',' . $length : '');
 
@@ -581,7 +658,7 @@ abstract class BaseQuery
      *
      * @return $this
      */
-    public function page(int $page, int $listRows = null)
+    public function page(int $page, ?int $listRows = null)
     {
         $this->options['page'] = [$page, $listRows];
 
@@ -726,7 +803,7 @@ abstract class BaseQuery
      *
      * @throws Exception
      */
-    public function paginate(int | array $listRows = null, int | bool $simple = false): Paginator
+    public function paginate(int | array | null $listRows = null, int | bool $simple = false): Paginator
     {
         if (is_int($simple)) {
             $total  = $simple;
@@ -792,7 +869,7 @@ abstract class BaseQuery
      *
      * @throws Exception
      */
-    public function paginateX(int | array $listRows = null, string $key = null, string $sort = null): Paginator
+    public function paginateX(int | array | null $listRows = null, ?string $key = null, ?string $sort = null): Paginator
     {
         $defaultConfig = [
             'query' => [], //url额外参数
@@ -865,7 +942,7 @@ abstract class BaseQuery
      *
      * @throws Exception
      */
-    public function more(int $limit, int | string $lastId = null, string $key = null, string $sort = null): array
+    public function more(int $limit, int | string | null $lastId = null, ?string $key = null, ?string $sort = null): array
     {
         $key = $key ?: $this->getPk();
 
@@ -1033,7 +1110,7 @@ abstract class BaseQuery
      *
      * @return $this
      */
-    public function sequence(string $sequence = null)
+    public function sequence(?string $sequence = null)
     {
         $this->options['sequence'] = $sequence;
 
@@ -1271,9 +1348,18 @@ abstract class BaseQuery
             $this->where($this->model->getWhere());
         }
 
-        if (empty($this->options['where'])) {
+        if (empty($this->options['where']) && empty($this->options['scope'])) {
             // 如果没有任何更新条件则不执行
             throw new Exception('miss update condition');
+        }
+
+        // 检查只读字段
+        if (!empty($this->options['readonly_fields'])) {
+            foreach ($this->options['readonly_fields'] as $field) {
+                if (array_key_exists($field, $this->options['data'])) {
+                    unset($this->options['data'][$field]);
+                }
+            }
         }
 
         return $this->connection->update($this);
@@ -1299,7 +1385,7 @@ abstract class BaseQuery
             $this->where($this->model->getWhere());
         }
 
-        if (true !== $data && empty($this->options['where'])) {
+        if (true !== $data && empty($this->options['where']) && empty($this->options['scope'])) {
             // 如果条件为空 不进行删除操作 除非设置 1=1
             throw new Exception('delete without condition');
         }
@@ -1368,7 +1454,7 @@ abstract class BaseQuery
      *
      * @return mixed
      */
-    public function find($data = null, Closure $closure = null)
+    public function find($data = null, ?Closure $closure = null)
     {
         if ($data instanceof Closure) {
             $closure = $data;
